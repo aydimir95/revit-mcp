@@ -2,99 +2,130 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withRevitConnection } from "../utils/ConnectionManager.js";
 
-export function registerAIElementFilterTool(server: McpServer) {
+// Zod schema for 3D point (JZPoint)
+const pointSchema = z.object({
+  x: z.number().describe("X coordinate in millimeters"),
+  y: z.number().describe("Y coordinate in millimeters"),
+  z: z.number().describe("Z coordinate in millimeters"),
+});
+
+export function registerAiElementFilterTool(server: McpServer) {
   server.tool(
     "ai_element_filter",
-    "An intelligent Revit element querying tool designed specifically for AI assistants to retrieve detailed element information from Revit projects. This tool allows the AI to request elements matching specific criteria (such as category, type, visibility, or spatial location) and then perform further analysis on the returned data to answer complex user queries about Revit model elements. Example: When a user asks 'Find all walls taller than 5m in the project', the AI would: 1) Call this tool with parameters: {\"filterCategory\": \"OST_Walls\", \"includeInstances\": true}, 2) Receive detailed information about all wall instances in the project, 3) Process the returned data to filter walls with height > 5000mm, 4) Present the filtered results to the user with relevant details.",
+    "Advanced AI-powered element filtering with category, type, family, spatial, and visibility filters. Returns detailed element information including geometry, parameters, and relationships.",
     {
       data: z.object({
         filterCategory: z
           .string()
           .optional()
-          .describe("Enumeration of built-in element categories in Revit used for filtering and identifying specific element types (e.g., OST_Walls, OST_Floors, OST_GenericModel). Note that furniture elements may be classified as either OST_Furniture or OST_GenericModel categories, requiring flexible selection approaches"),
+          .describe(
+            "Revit built-in category name (e.g., 'OST_Walls', 'OST_Doors', 'OST_Windows'). If not specified, no category filtering is applied"
+          ),
         filterElementType: z
           .string()
           .optional()
-          .describe("The Revit element type name used for filtering specific elements by their class or type (e.g., 'Wall', 'Floor', 'Autodesk.Revit.DB.Wall'). Gets or sets the name of the Revit element type to be filtered."),
+          .describe(
+            "Revit element type name (e.g., 'Wall', 'Autodesk.Revit.DB.Wall'). If not specified, no type filtering is applied"
+          ),
         filterFamilySymbolId: z
           .number()
           .optional()
-          .describe("The ElementId of a specific FamilySymbol (type) in Revit used for filtering elements by their type (e.g., '123456', '789012'). Gets or sets the ElementId of the FamilySymbol to be used as a filter criterion. Use '-1' if no specific FamilySymbol filtering is needed."),
+          .default(-1)
+          .describe(
+            "Family symbol ElementId to filter by. Use -1 for no family filtering. Only applies to element instances"
+          ),
         includeTypes: z
           .boolean()
+          .optional()
           .default(false)
-          .describe("Determines whether to include element types (such as wall types, door types, etc.) in the selection results. When set to true, element types will be included; when false, they will be excluded."),
+          .describe(
+            "Whether to include element types (e.g., wall types, door types) in results"
+          ),
         includeInstances: z
           .boolean()
+          .optional()
           .default(true)
-          .describe("Determines whether to include element instances (such as placed walls, doors, etc.) in the selection results. When set to true, element instances will be included; when false, they will be excluded."),
+          .describe(
+            "Whether to include element instances (e.g., placed walls, doors) in results"
+          ),
         filterVisibleInCurrentView: z
           .boolean()
           .optional()
-          .describe("Determines whether to only return elements that are visible in the current view. When set to true, only elements visible in the current view will be returned. Note: This filter only applies to element instances, not type elements."),
-        boundingBoxMin: z
-          .object({
-            p0: z.object({
-              x: z.number().describe("X coordinate of start point"),
-              y: z.number().describe("Y coordinate of start point"),
-              z: z.number().describe("Z coordinate of start point"),
-            }),
-            p1: z.object({
-              x: z.number().describe("X coordinate of end point"),
-              y: z.number().describe("Y coordinate of end point"),
-              z: z.number().describe("Z coordinate of end point"),
-            }),
-          })
+          .default(false)
+          .describe(
+            "If true, only returns elements visible in the current view. Only applies to element instances"
+          ),
+        boundingBoxMin: pointSchema
           .optional()
-          .describe("The minimum point coordinates (in mm) for spatial bounding box filtering. When set along with boundingBoxMax, only elements that intersect with this bounding box will be returned. Set to null to disable this filter."),
-        boundingBoxMax: z
-          .object({
-            p0: z.object({
-              x: z.number().describe("X coordinate of start point"),
-              y: z.number().describe("Y coordinate of start point"),
-              z: z.number().describe("Z coordinate of start point"),
-            }),
-            p1: z.object({
-              x: z.number().describe("X coordinate of end point"),
-              y: z.number().describe("Y coordinate of end point"),
-              z: z.number().describe("Z coordinate of end point"),
-            }),
-          })
+          .describe(
+            "Minimum point of spatial bounding box filter (mm). Must be used together with boundingBoxMax"
+          ),
+        boundingBoxMax: pointSchema
           .optional()
-          .describe("The maximum point coordinates (in mm) for spatial bounding box filtering. When set along with boundingBoxMin, only elements that intersect with this bounding box will be returned. Set to null to disable this filter."),
-          maxElements: z
+          .describe(
+            "Maximum point of spatial bounding box filter (mm). Must be used together with boundingBoxMin"
+          ),
+        maxElements: z
           .number()
           .optional()
-          .describe("The maximum number of elements to find in a single tool invocation. Default is 50. Values exceeding 50 are not recommended for performance reasons."),
-      })
-        .describe("Configuration parameters for the Revit element filter tool. These settings determine which elements will be selected from the Revit project based on various filtering criteria. Multiple filters can be combined to achieve precise element selection. All spatial coordinates should be provided in millimeters."),
+          .default(50)
+          .describe("Maximum number of elements to return. Default is 50"),
+      }).describe("Filter settings for element query"),
     },
     async (args, extra) => {
-      const params = args;
-
       try {
         const response = await withRevitConnection(async (revitClient) => {
-          return await revitClient.sendCommand(
-            "ai_element_filter",
-            params
-          );
+          return await revitClient.sendCommand("ai_element_filter", args);
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
+        // Format response
+        if (response.Success) {
+          const elements = response.Response || [];
+          let resultText = `Found ${elements.length} element(s) matching filter criteria.\n\n`;
+
+          if (elements.length > 0) {
+            resultText += "Elements:\n";
+            elements.forEach((elem: any, index: number) => {
+              resultText += `${index + 1}. ID: ${elem.id || elem.Id}, `;
+              resultText += `Category: ${elem.category || "N/A"}, `;
+              resultText += `Type: ${elem.typeName || elem.elementTypeName || "N/A"}\n`;
+            });
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: resultText,
+              },
+              {
+                type: "text",
+                text: `Full JSON response:\n${JSON.stringify(
+                  response.Response,
+                  null,
+                  2
+                )}`,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Element filter failed: ${response.Message}`,
+              },
+            ],
+          };
+        }
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Get element information failed: ${error instanceof Error ? error.message : String(error)
-                }`,
+              text: `Element filter failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
             },
           ],
         };

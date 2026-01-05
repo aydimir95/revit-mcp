@@ -2,58 +2,109 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { withRevitConnection } from "../utils/ConnectionManager.js";
 
+// Enum for element operation types
+const operationTypeSchema = z.enum([
+  "Select",
+  "SelectionBox",
+  "SetColor",
+  "SetTransparency",
+  "Delete",
+  "Hide",
+  "TempHide",
+  "Isolate",
+  "Unhide",
+  "ResetIsolate",
+]);
+
 export function registerOperateElementTool(server: McpServer) {
   server.tool(
     "operate_element",
-    "Operate on Revit elements by performing actions such as select, selectionBox, setColor, setTransparency, delete, hide, etc.",
+    "Modify element properties such as selection, visibility, color, and transparency. Supports operations like select, hide, isolate, delete, and color/transparency overrides.",
     {
       data: z
         .object({
           elementIds: z
-            .array(z
-              .number()
-              .describe("A valid Revit element ID to operate on")
-            )
-            .describe("Array of Revit element IDs to perform the specified action on"),
-          action: z
-            .string()
-            .describe("The operation to perform on elements. Valid values: Select, SelectionBox, SetColor, SetTransparency, Delete, Hide, TempHide, Isolate, Unhide, ResetIsolate, Highlight. Select enables direct element selection in the active view. SelectionBox allows selection of elements by drawing a rectangular window in the view. SetColor changes the color of elements (requires elementColor parameter). SetTransparency adjusts element transparency (requires transparencyValue parameter). Highlight is a convenience operation that sets elements to red color (internally calls SetColor with red). Delete permanently removes elements from the project. Hide makes elements invisible in the current view until explicitly shown. TempHide temporarily hides elements in the current view. Isolate displays only selected elements while hiding all others. Unhide reveals previously hidden elements. ResetIsolate restores normal visibility to the view."),
+            .array(z.number())
+            .min(1)
+            .describe("List of element IDs to operate on"),
+          action: operationTypeSchema.describe(`Operation to perform:
+  - Select: Select the elements in the UI
+  - SelectionBox: Show selection box around elements
+  - SetColor: Apply color override to elements
+  - SetTransparency: Apply transparency override to elements
+  - Delete: Delete the elements from the model
+  - Hide: Hide elements in current view
+  - TempHide: Temporarily hide elements
+  - Isolate: Isolate elements (hide all others)
+  - Unhide: Unhide previously hidden elements
+  - ResetIsolate: Reset isolation (show all elements)`),
           transparencyValue: z
             .number()
+            .int()
+            .min(0)
+            .max(100)
+            .optional()
             .default(50)
-            .describe("Transparency value (0-100) for SetTransparency action. Higher values increase transparency."),
+            .describe(
+              "Transparency value (0-100). Higher values = more transparent. Only used when action is SetTransparency"
+            ),
           colorValue: z
-            .array(z.number())
+            .array(z.number().int().min(0).max(255))
+            .length(3)
+            .optional()
             .default([255, 0, 0])
-            .describe("RGB color values for SetColor action. Default is red [255,0,0].")
+            .describe(
+              "RGB color values [R, G, B] where each value is 0-255. Default is red [255, 0, 0]. Only used when action is SetColor"
+            ),
         })
-        .describe("Parameters for operating on Revit elements with specific actions"),
+        .describe("Operation settings for element manipulation"),
     },
     async (args, extra) => {
-      const params = args;
-
       try {
         const response = await withRevitConnection(async (revitClient) => {
-          return await revitClient.sendCommand(
-            "operate_element",
-            params
-          );
+          return await revitClient.sendCommand("operate_element", args);
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
+        // Format response
+        if (response.Success) {
+          const action = args.data.action;
+          const elementCount = args.data.elementIds.length;
+
+          let message = `Successfully performed ${action} operation on ${elementCount} element(s).`;
+
+          if (action === "SetColor") {
+            const [r, g, b] = args.data.colorValue || [255, 0, 0];
+            message += ` Applied color RGB(${r}, ${g}, ${b}).`;
+          } else if (action === "SetTransparency") {
+            message += ` Applied transparency: ${args.data.transparencyValue}%.`;
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: message,
+              },
+            ],
+          };
+        } else {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Operation failed: ${response.Message}`,
+              },
+            ],
+          };
+        }
       } catch (error) {
         return {
           content: [
             {
               type: "text",
-              text: `Operate elements failed: ${error instanceof Error ? error.message : String(error)}`,
+              text: `Operation failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
             },
           ],
         };

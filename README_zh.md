@@ -95,6 +95,8 @@ flowchart LR
 | get_current_view_elements  | 获得当前视图的元素                 |
 | get_available_family_types | 获得当前项目中可以使用的族类型         |
 | get_selected_elements      | 获得选中的元素                         |
+| create_grid                | 创建轴网系统，支持智能间距和自动命名 |
+| create_structural_framing_system | 创建结构框架系统，支持可配置的间距和方向 |
 | create_point_based_element  | 创建点式元素（例如门、窗、家具等） |
 | create_line_based_element   | 创建线式元素（例如墙、梁、管道等） |
 | create_surface_based_element   | 创建面状元素（例如地板、天花板等） |
